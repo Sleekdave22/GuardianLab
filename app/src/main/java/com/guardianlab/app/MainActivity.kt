@@ -16,9 +16,12 @@ import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
+@androidx.camera.core.ExperimentalGetImage
 class MainActivity : ComponentActivity() {
 
     private lateinit var previewView: PreviewView
+    private lateinit var warningText: TextView
+    private lateinit var shieldView: android.view.View
     private lateinit var faceCountText: TextView
     private lateinit var cameraExecutor: ExecutorService
 
@@ -49,10 +52,23 @@ class MainActivity : ComponentActivity() {
             setPadding(20, 40, 20, 40)
         }
 
+        warningText = TextView(this).apply {
+            textSize = 28f
+            setTextColor(android.graphics.Color.RED)
+            setBackgroundColor(android.graphics.Color.argb(180, 0, 0, 0))
+            text = ""
+            setPadding(20, 120, 20, 40)
+        }
+        shieldView = android.view.View(this).apply {
+            setBackgroundColor(android.graphics.Color.argb(220, 0, 0, 0))
+            visibility = android.view.View.GONE
+        }
+
         val layout = android.widget.FrameLayout(this)
         layout.addView(previewView)
         layout.addView(faceCountText)
-
+        layout.addView(warningText)
+        layout.addView(shieldView)
         setContentView(layout)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -67,7 +83,6 @@ class MainActivity : ComponentActivity() {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
-
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
@@ -103,8 +118,6 @@ class MainActivity : ComponentActivity() {
 
         }, ContextCompat.getMainExecutor(this))
     }
-
-    @androidx.camera.core.ExperimentalGetImage
     private fun processImage(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image ?: run {
             imageProxy.close()
@@ -119,7 +132,17 @@ class MainActivity : ComponentActivity() {
         detector.process(image)
             .addOnSuccessListener { faces ->
                 runOnUiThread {
-                    faceCountText.text = "Faces: ${faces.size}"
+                    val count = faces.size
+
+                    faceCountText.text = "Faces: $count"
+
+                    if (count >= 2) {
+                        warningText.text = "⚠ ADDITIONAL VIEWER DETECTED"
+                        shieldView.visibility = android.view.View.VISIBLE
+                    } else {
+                        warningText.text = ""
+                        shieldView.visibility = android.view.View.GONE
+                    }
                 }
             }
             .addOnCompleteListener {
