@@ -24,7 +24,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var shieldView: android.view.View
     private lateinit var faceCountText: TextView
     private lateinit var cameraExecutor: ExecutorService
+    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
+    private val hideShieldRunnable = Runnable {
+        shieldView.visibility = android.view.View.GONE
+        warningText.text = ""
+    }
     private val detector by lazy {
         val options = FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
@@ -137,11 +142,18 @@ class MainActivity : ComponentActivity() {
                     faceCountText.text = "Faces: $count"
 
                     if (count >= 2) {
+                        handler.removeCallbacks(hideShieldRunnable)
+
                         warningText.text = "⚠ ADDITIONAL VIEWER DETECTED"
                         shieldView.visibility = android.view.View.VISIBLE
                     } else {
-                        warningText.text = ""
-                        shieldView.visibility = android.view.View.GONE
+                        handler.removeCallbacks(hideShieldRunnable)
+
+                        if (shieldView.visibility == android.view.View.VISIBLE) {
+                            handler.postDelayed(hideShieldRunnable, 3000)
+                        } else {
+                            warningText.text = ""
+                        }
                     }
                 }
             }
