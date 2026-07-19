@@ -112,8 +112,10 @@ class MainActivity : ComponentActivity() {
                 overlayManager.updateFaceCount(count)
 
                 if (count >= 2) {
+                    overlayManager.showWarning("⚠ ADDITIONAL VIEWER DETECTED")
                     shieldController.showProtection()
                 } else {
+                    overlayManager.clearWarning()
                     shieldController.hideProtectionWithDelay()
                 }
             }

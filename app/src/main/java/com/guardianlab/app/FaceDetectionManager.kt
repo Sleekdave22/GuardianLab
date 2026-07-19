@@ -38,7 +38,7 @@ class FaceDetectionManager(
         detector.process(image)
             .addOnSuccessListener { faces ->
 
-                onFaceCountChanged(4)
+                onFaceCountChanged(faces.size)
 
             }
             .addOnCompleteListener {
