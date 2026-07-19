@@ -25,7 +25,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var faceCountText: TextView
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var blurPanel: android.view.View
-
+    private lateinit var shieldController: ShieldController
+    private lateinit var cameraManager: CameraManager
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val hideShieldRunnable = Runnable {
@@ -44,7 +45,7 @@ class MainActivity : ComponentActivity() {
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
-                startCamera()
+                cameraManager.startCamera()
             }
         }
 
@@ -90,53 +91,31 @@ class MainActivity : ComponentActivity() {
 
         layout.addView(blurPanel, blurParams)
         setContentView(layout)
+        shieldController = ShieldController(
+            shieldView,
+            blurPanel,
+            warningText
+        )
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        cameraManager = CameraManager(
+            lifecycleOwner = this,
+            previewView = previewView,
+            cameraExecutor = cameraExecutor,
+            imageAnalyzer = ImageAnalysis.Analyzer { imageProxy ->
+                processImage(imageProxy)
+            }
+        )
 
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA
             ) == PackageManager.PERMISSION_GRANTED
         ) {
-            startCamera()
+            cameraManager.startCamera()
         } else {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
-    }
-    private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
-
-        cameraProviderFuture.addListener({
-            val cameraProvider = cameraProviderFuture.get()
-
-            val preview = Preview.Builder().build().also {
-                it.surfaceProvider = previewView.surfaceProvider
-            }
-
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-
-            imageAnalyzer.setAnalyzer(cameraExecutor) { imageProxy ->
-                processImage(imageProxy)
-            }
-
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
-            try {
-                cameraProvider.unbindAll()
-
-                cameraProvider.bindToLifecycle(
-                    this,
-                    cameraSelector,
-                    preview,
-                    imageAnalyzer
-                )
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-        }, ContextCompat.getMainExecutor(this))
     }
     private fun processImage(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image ?: run {
@@ -163,29 +142,11 @@ class MainActivity : ComponentActivity() {
 
                     if (count >= 2) {
 
-                        handler.removeCallbacks(hideShieldRunnable)
-
-                        warningText.text = "⚠ ADDITIONAL VIEWER DETECTED"
-
-                        shieldView.visibility = android.view.View.VISIBLE
-                        blurPanel.visibility = android.view.View.VISIBLE
+                        shieldController.showProtection()
 
                     } else {
 
-                        handler.removeCallbacks(hideShieldRunnable)
-
-                        if (shieldView.visibility == android.view.View.VISIBLE) {
-
-                            handler.postDelayed(
-                                hideShieldRunnable,
-                                3000
-                            )
-
-                        } else {
-
-                            warningText.text = ""
-
-                        }
+                        shieldController.hideProtectionWithDelay()
                     }
                 }
             }
