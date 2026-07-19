@@ -27,6 +27,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var blurPanel: android.view.View
     private lateinit var shieldController: ShieldController
     private lateinit var cameraManager: CameraManager
+    private lateinit var faceDetectionManager: FaceDetectionManager
+    private lateinit var overlayManager: OverlayManager
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val hideShieldRunnable = Runnable {
@@ -90,12 +92,32 @@ class MainActivity : ComponentActivity() {
         }
 
         layout.addView(blurPanel, blurParams)
+        warningText.bringToFront()
+        faceCountText.bringToFront()
         setContentView(layout)
         shieldController = ShieldController(
             shieldView,
             blurPanel,
             warningText
         )
+        overlayManager = OverlayManager(
+            faceCountText,
+            warningText
+        )
+        faceDetectionManager = FaceDetectionManager { count ->
+
+            runOnUiThread {
+
+                faceCountText.visibility = android.view.View.VISIBLE
+                overlayManager.updateFaceCount(count)
+
+                if (count >= 2) {
+                    shieldController.showProtection()
+                } else {
+                    shieldController.hideProtectionWithDelay()
+                }
+            }
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
         cameraManager = CameraManager(
@@ -103,7 +125,7 @@ class MainActivity : ComponentActivity() {
             previewView = previewView,
             cameraExecutor = cameraExecutor,
             imageAnalyzer = ImageAnalysis.Analyzer { imageProxy ->
-                processImage(imageProxy)
+                faceDetectionManager.process(imageProxy)
             }
         )
 
@@ -134,7 +156,7 @@ class MainActivity : ComponentActivity() {
 
                     // TEST VALUE
                     // Change this to 1 or 2 while testing.
-                    val count = faces.size
+                    val count = 4
                     // Later replace with:
                     // val count = faces.size
 
