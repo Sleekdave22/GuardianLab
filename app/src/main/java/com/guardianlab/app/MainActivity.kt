@@ -24,10 +24,13 @@ class MainActivity : ComponentActivity() {
     private lateinit var shieldView: android.view.View
     private lateinit var faceCountText: TextView
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var blurPanel: android.view.View
+
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
 
     private val hideShieldRunnable = Runnable {
         shieldView.visibility = android.view.View.GONE
+        blurPanel.visibility = android.view.View.GONE
         warningText.text = ""
     }
     private val detector by lazy {
@@ -68,12 +71,24 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.argb(220, 0, 0, 0))
             visibility = android.view.View.GONE
         }
+        blurPanel = android.view.View(this).apply {
+            setBackgroundColor(android.graphics.Color.argb(220, 50, 50, 50))
+            visibility = android.view.View.GONE
+        }
 
         val layout = android.widget.FrameLayout(this)
         layout.addView(previewView)
         layout.addView(faceCountText)
         layout.addView(warningText)
         layout.addView(shieldView)
+        val blurParams = android.widget.FrameLayout.LayoutParams(
+            700,
+            300
+        ).apply {
+            gravity = android.view.Gravity.CENTER
+        }
+
+        layout.addView(blurPanel, blurParams)
         setContentView(layout)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -137,22 +152,39 @@ class MainActivity : ComponentActivity() {
         detector.process(image)
             .addOnSuccessListener { faces ->
                 runOnUiThread {
+
+                    // TEST VALUE
+                    // Change this to 1 or 2 while testing.
                     val count = faces.size
+                    // Later replace with:
+                    // val count = faces.size
 
                     faceCountText.text = "Faces: $count"
 
                     if (count >= 2) {
+
                         handler.removeCallbacks(hideShieldRunnable)
 
                         warningText.text = "⚠ ADDITIONAL VIEWER DETECTED"
+
                         shieldView.visibility = android.view.View.VISIBLE
+                        blurPanel.visibility = android.view.View.VISIBLE
+
                     } else {
+
                         handler.removeCallbacks(hideShieldRunnable)
 
                         if (shieldView.visibility == android.view.View.VISIBLE) {
-                            handler.postDelayed(hideShieldRunnable, 3000)
+
+                            handler.postDelayed(
+                                hideShieldRunnable,
+                                3000
+                            )
+
                         } else {
+
                             warningText.text = ""
+
                         }
                     }
                 }
@@ -161,7 +193,6 @@ class MainActivity : ComponentActivity() {
                 imageProxy.close()
             }
     }
-
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
