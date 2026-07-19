@@ -29,21 +29,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var cameraManager: CameraManager
     private lateinit var faceDetectionManager: FaceDetectionManager
     private lateinit var overlayManager: OverlayManager
-    private val handler = android.os.Handler(android.os.Looper.getMainLooper())
-
-    private val hideShieldRunnable = Runnable {
-        shieldView.visibility = android.view.View.GONE
-        blurPanel.visibility = android.view.View.GONE
-        warningText.text = ""
-    }
-    private val detector by lazy {
-        val options = FaceDetectorOptions.Builder()
-            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .build()
-
-        FaceDetection.getClient(options)
-    }
-
+    private lateinit var guardianEngine: GuardianEngine
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
@@ -104,6 +90,7 @@ class MainActivity : ComponentActivity() {
             faceCountText,
             warningText
         )
+        guardianEngine = GuardianEngine()
         faceDetectionManager = FaceDetectionManager { count ->
 
             runOnUiThread {
@@ -111,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 faceCountText.visibility = android.view.View.VISIBLE
                 overlayManager.updateFaceCount(count)
 
-                if (count >= 2) {
+                if (guardianEngine.shouldActivateProtection(count)) {
                     overlayManager.showWarning("⚠ ADDITIONAL VIEWER DETECTED")
                     shieldController.showProtection()
                 } else {
@@ -140,46 +127,5 @@ class MainActivity : ComponentActivity() {
         } else {
             requestPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
-    }
-    private fun processImage(imageProxy: ImageProxy) {
-        val mediaImage = imageProxy.image ?: run {
-            imageProxy.close()
-            return
-        }
-
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
-
-        detector.process(image)
-            .addOnSuccessListener { faces ->
-                runOnUiThread {
-
-                    // TEST VALUE
-                    // Change this to 1 or 2 while testing.
-                    val count = 4
-                    // Later replace with:
-                    // val count = faces.size
-
-                    faceCountText.text = "Faces: $count"
-
-                    if (count >= 2) {
-
-                        shieldController.showProtection()
-
-                    } else {
-
-                        shieldController.hideProtectionWithDelay()
-                    }
-                }
-            }
-            .addOnCompleteListener {
-                imageProxy.close()
-            }
-    }
-    override fun onDestroy() {
-        super.onDestroy()
-        cameraExecutor.shutdown()
     }
 }
