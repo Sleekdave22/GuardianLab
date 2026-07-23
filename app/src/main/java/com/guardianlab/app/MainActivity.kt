@@ -40,7 +40,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        previewView = PreviewView(this)
+        previewView = PreviewView(this).apply {
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
         faceCountText = TextView(this).apply {
             textSize = 24f
             setTextColor(android.graphics.Color.WHITE)
@@ -57,11 +59,13 @@ class MainActivity : ComponentActivity() {
             setPadding(20, 120, 20, 40)
         }
         shieldView = android.view.View(this).apply {
-            setBackgroundColor(android.graphics.Color.argb(220, 0, 0, 0))
+            setBackgroundColor(
+                android.graphics.Color.argb(245, 0, 0, 0)
+            )
             visibility = android.view.View.GONE
         }
         blurPanel = android.view.View(this).apply {
-            setBackgroundColor(android.graphics.Color.argb(220, 50, 50, 50))
+            setBackgroundColor(android.graphics.Color.argb(0, 0, 0, 0))
             visibility = android.view.View.GONE
         }
 

@@ -1,5 +1,5 @@
 package com.guardianlab.app
-
+import android.util.Log
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageProxy
 import com.google.mlkit.vision.common.InputImage
@@ -38,9 +38,18 @@ class FaceDetectionManager(
         detector.process(image)
             .addOnSuccessListener { faces ->
 
+                Log.d("GuardianFace", "Faces detected: ${faces.size}")
+
                 onFaceCountChanged(faces.size)
 
-            }
+        }
+            .addOnFailureListener { e ->
+
+            Log.e("GuardianFace", "Face detection failed", e)
+
+        }
+            .addOnCompleteListener {
+        }
             .addOnCompleteListener {
 
                 imageProxy.close()
