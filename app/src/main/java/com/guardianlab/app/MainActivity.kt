@@ -1,5 +1,6 @@
 package com.guardianlab.app
 
+import android.util.Log
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -10,6 +11,7 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
@@ -23,13 +25,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var warningText: TextView
     private lateinit var shieldView: android.view.View
     private lateinit var faceCountText: TextView
+    private lateinit var sensitiveContentText: TextView
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var blurPanel: android.view.View
     private lateinit var shieldController: ShieldController
     private lateinit var cameraManager: CameraManager
     private lateinit var faceDetectionManager: FaceDetectionManager
+
+    private lateinit var phoneDetectionManager: PhoneDetectionManager
     private lateinit var overlayManager: OverlayManager
     private lateinit var guardianEngine: GuardianEngine
+    private lateinit var guardian: Guardian
     private val requestPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if (granted) {
@@ -40,6 +46,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        Log.d("GuardianFlow", "MAIN ACTIVITY STARTED")
+
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
@@ -49,6 +57,13 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.argb(150, 0, 0, 0))
             text = "Faces: 0"
             setPadding(20, 40, 20, 40)
+        }
+        sensitiveContentText = TextView(this).apply {
+            textSize = 26f
+            setTextColor(android.graphics.Color.BLACK)
+            setBackgroundColor(android.graphics.Color.WHITE)
+            text = "Account Balance\n₦2,450,000"
+            setPadding(40, 40, 40, 40)
         }
 
         warningText = TextView(this).apply {
@@ -71,6 +86,14 @@ class MainActivity : ComponentActivity() {
 
         val layout = android.widget.FrameLayout(this)
         layout.addView(previewView)
+        val sensitiveContentParams =
+            android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = android.view.Gravity.CENTER
+            }
+        layout.addView(sensitiveContentText, sensitiveContentParams)
         layout.addView(faceCountText)
         layout.addView(warningText)
         layout.addView(shieldView)
@@ -88,8 +111,11 @@ class MainActivity : ComponentActivity() {
         shieldController = ShieldController(
             shieldView,
             blurPanel,
-            warningText
+            warningText,
+            layout
         )
+        guardian = Guardian(shieldController)
+        guardian.protect(sensitiveContentText)
         overlayManager = OverlayManager(
             faceCountText,
             warningText
@@ -98,6 +124,7 @@ class MainActivity : ComponentActivity() {
         faceDetectionManager = FaceDetectionManager { count ->
 
             runOnUiThread {
+                Log.d("GuardianFlow", "Face count received: $count")
 
                 faceCountText.visibility = android.view.View.VISIBLE
                 overlayManager.updateFaceCount(count)
@@ -111,17 +138,43 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        phoneDetectionManager = PhoneDetectionManager { phoneDetected ->
+
+            Log.d(
+                "GuardianPhone",
+                "Phone detected: $phoneDetected"
+            )
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+
         cameraManager = CameraManager(
             lifecycleOwner = this,
             previewView = previewView,
             cameraExecutor = cameraExecutor,
             imageAnalyzer = ImageAnalysis.Analyzer { imageProxy ->
-                faceDetectionManager.process(imageProxy)
+
+                val mediaImage = imageProxy.image
+
+                if (mediaImage == null) {
+                    imageProxy.close()
+                    return@Analyzer
+                }
+
+                val image = InputImage.fromMediaImage(
+                    mediaImage,
+                    imageProxy.imageInfo.rotationDegrees
+                )
+
+                val faceTask = faceDetectionManager.process(image)
+                val phoneTask = phoneDetectionManager.process(image)
+
+                Tasks.whenAllComplete(faceTask, phoneTask)
+                    .addOnCompleteListener {
+                        imageProxy.close()
+                    }
             }
         )
-
         if (ContextCompat.checkSelfPermission(
                 this,
                 Manifest.permission.CAMERA

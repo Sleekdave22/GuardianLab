@@ -5,5 +5,4 @@ class GuardianEngine {
     fun shouldActivateProtection(faceCount: Int): Boolean {
         return faceCount >= 2
     }
-
 }

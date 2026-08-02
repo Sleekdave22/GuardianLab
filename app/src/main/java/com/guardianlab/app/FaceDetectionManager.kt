@@ -1,14 +1,14 @@
 package com.guardianlab.app
+
 import android.util.Log
-import androidx.camera.core.ExperimentalGetImage
-import androidx.camera.core.ImageProxy
+import com.google.android.gms.tasks.Task
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.Face
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
+
 class FaceDetectionManager(
-
     private val onFaceCountChanged: (Int) -> Unit
-
 ) {
 
     private val detector by lazy {
@@ -22,38 +22,25 @@ class FaceDetectionManager(
         FaceDetection.getClient(options)
     }
 
-    @androidx.annotation.OptIn(ExperimentalGetImage::class)
-    fun process(imageProxy: ImageProxy) {
+    fun process(image: InputImage): Task<List<Face>> {
 
-        val mediaImage = imageProxy.image ?: run {
-            imageProxy.close()
-            return
-        }
-
-        val image = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
-
-        detector.process(image)
+        return detector.process(image)
             .addOnSuccessListener { faces ->
 
-                Log.d("GuardianFace", "Faces detected: ${faces.size}")
+                Log.d(
+                    "GuardianFace",
+                    "Faces detected: ${faces.size}"
+                )
 
                 onFaceCountChanged(faces.size)
-
-        }
+            }
             .addOnFailureListener { e ->
 
-            Log.e("GuardianFace", "Face detection failed", e)
-
-        }
-            .addOnCompleteListener {
-        }
-            .addOnCompleteListener {
-
-                imageProxy.close()
-
+                Log.e(
+                    "GuardianFace",
+                    "Face detection failed",
+                    e
+                )
             }
     }
 }
