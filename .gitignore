@@ -13,3 +13,16 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Python virtual environment
+guardian-ai/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# ML training outputs
+ml_training/runs/
+
+# YOLO training models
+*.pt
