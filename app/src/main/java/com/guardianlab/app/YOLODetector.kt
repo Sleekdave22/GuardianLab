@@ -3,6 +3,7 @@ package com.guardianlab.app
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.util.Log
 import org.tensorflow.lite.Interpreter
@@ -53,7 +54,7 @@ class YOLODetector(
         Log.d("YOLODetector", "MODEL OUTPUT SHAPE: ${interpreter.getOutputTensor(0).shape().contentToString()}")
         Log.d("YOLODetector", "DETECTOR DIMENSIONS: width=$inputWidth, height=$inputHeight")
 
-        // 1. Preprocessing: Letterbox (Maintain Aspect Ratio)
+        // 1. Preprocessing: Letterbox (Maintain Aspect Ratio) + Horizontal Flip (Un-mirror)
         val bitmapWidth = bitmap.width
         val bitmapHeight = bitmap.height
         Log.d("YOLODetector", "BITMAP BEFORE LETTERBOX: width=$bitmapWidth, height=$bitmapHeight")
@@ -70,9 +71,17 @@ class YOLODetector(
         val left = (inputWidth - nw) / 2f
         val top = (inputHeight - nh) / 2f
 
+        val matrix = Matrix().apply {
+            // Resize
+            postScale(scale, scale)
+            // Un-mirror (Horizontal Flip) since front camera is mirrored
+            postScale(-1f, 1f, (nw / 2f), (nh / 2f))
+            // Center in 640x640
+            postTranslate(left, top)
+        }
+        
         val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-        val scaledBitmap = Bitmap.createScaledBitmap(bitmap, nw, nh, true)
-        canvas.drawBitmap(scaledBitmap, left, top, paint)
+        canvas.drawBitmap(bitmap, matrix, paint)
 
         Log.d("YOLODetector", "LETTERBOX: scale=$scale, padLeft=$left, padTop=$top, orig=${bitmapWidth}x${bitmapHeight}, target=${nw}x${nh}")
 
@@ -90,25 +99,32 @@ class YOLODetector(
         var minG = 1f; var maxG = 0f
         var minB = 1f; var maxB = 0f
 
+        /*
+         * NORMALIZATION TEST:
+         * Standard YOLOv11 usually expects [0, 1].
+         * If results are extremely low, change 255.0f to 1.0f below.
+         */
+        val normFactor = 255.0f 
+
         // Pack in NCHW order and track stats
         for (pixel in pixels) {
-            val r = ((pixel shr 16) and 0xFF) / 255.0f
+            val r = ((pixel shr 16) and 0xFF) / normFactor
             inputBuffer.putFloat(r)
             sumR += r; minR = minOf(minR, r); maxR = maxOf(maxR, r)
         }
         for (pixel in pixels) {
-            val g = ((pixel shr 8) and 0xFF) / 255.0f
+            val g = ((pixel shr 8) and 0xFF) / normFactor
             inputBuffer.putFloat(g)
             sumG += g; minG = minOf(minG, g); maxG = maxOf(maxG, g)
         }
         for (pixel in pixels) {
-            val b = (pixel and 0xFF) / 255.0f
+            val b = (pixel and 0xFF) / normFactor
             inputBuffer.putFloat(b)
             sumB += b; minB = minOf(minB, b); maxB = maxOf(maxB, b)
         }
         
         val count = (inputWidth * inputHeight).toFloat()
-        Log.d("YOLODetector", "INPUT STATS: R[avg=${sumR/count}, min=$minR, max=$maxR], G[avg=${sumG/count}, min=$minG, max=$maxG], B[avg=${sumB/count}, min=$minB, max=$maxB]")
+        Log.d("YOLODetector", "INPUT STATS (Norm=$normFactor): R[avg=${sumR/count}, min=$minR, max=$maxR], G[avg=${sumG/count}, min=$minG, max=$maxG], B[avg=${sumB/count}, min=$minB, max=$maxB]")
 
         inputBuffer.rewind()
 
@@ -148,6 +164,15 @@ class YOLODetector(
         }
 
         Log.d("YOLODetector", "CELL PHONE MAX SCORE: $cellPhoneMaxScore, Candidate: $cellPhoneMaxCandidate")
+        
+        if (cellPhoneMaxCandidate != -1) {
+             Log.d("YOLODetector", "CELL PHONE RAW BOX: " +
+                "cx=${output[0][0][cellPhoneMaxCandidate]}, " +
+                "cy=${output[0][1][cellPhoneMaxCandidate]}, " +
+                "w=${output[0][2][cellPhoneMaxCandidate]}, " +
+                "h=${output[0][3][cellPhoneMaxCandidate]}")
+        }
+
         Log.d("YOLODetector", "--- Top 10 Raw Scores ---")
         topScores.toList().sortedByDescending { it.score }.forEachIndexed { i, raw ->
             val name = if (raw.classId < cocoNames.size) cocoNames[raw.classId] else "unknown"
@@ -171,6 +196,7 @@ class YOLODetector(
             }
 
             if (maxConfidence >= confidenceThreshold) {
+                // YOLO output is normalized [0, 1] relative to input dimensions (640)
                 val cx = output[0][0][candidate] * inputWidth
                 val cy = output[0][1][candidate] * inputHeight
                 val w = output[0][2][candidate] * inputWidth
@@ -183,6 +209,8 @@ class YOLODetector(
                 val y2_640 = cy + h / 2f
 
                 // Correct for letterbox padding and scale back to original bitmap size
+                // Note: Horizontal flip is un-mirrored here because the detection logic works on the flipped pixels.
+                // The boxes should map back to the 'upright' bitmap we passed in from MainActivity.
                 val x1 = (x1_640 - left) / scale
                 val y1 = (y1_640 - top) / scale
                 val x2 = (x2_640 - left) / scale

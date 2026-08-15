@@ -1,11 +1,11 @@
-# Tasks - Fix Camera Preview Dimming and Layout
+# Tasks - YOLO Detection Root Cause Investigation
 
-- [x] Fix `MainActivity.kt` UI layout
-    - [x] Update `PreviewView` scale type to `FILL_CENTER`
-    - [x] Set explicit `LayoutParams` for `faceCountText` and `warningText` (`WRAP_CONTENT` height)
-    - [x] Initialize `warningText` as `GONE`
-- [x] Update `OverlayManager.kt` visibility logic
-    - [x] Manage `VISIBLE`/`GONE` states for text overlays
-- [x] Verify fix
-    - [x] Preview brightness matches system camera
-    - [x] Overlays appear correctly without dimming the whole screen
+- [ ] Update `YOLODetector.kt` with diagnostic logic
+    - [ ] Add horizontal flip to letterboxing (un-mirror)
+    - [ ] Implement normalization range test (`[0, 1]` vs `[0, 255]`)
+    - [ ] Add BGR vs RGB channel order test
+    - [ ] Add raw box coordinate logging
+    - [ ] Log comparative stats for different normalization modes
+- [ ] Verify fix
+    - [ ] Run `analyze_file`
+    - [ ] Observe Logcat for diagnostic results
