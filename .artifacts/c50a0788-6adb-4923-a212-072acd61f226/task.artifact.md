@@ -1,11 +1,11 @@
-# Tasks - Fix Phone Detection Internal Error
+# Tasks - Fix Camera Preview Dimming and Layout
 
-- [x] Refactor detection managers to return Tasks
-    - [x] Update `FaceDetectionManager.kt`
-    - [x] Update `PhoneDetectionManager.kt`
-- [x] Update `MainActivity.kt` to coordinate tasks
-    - [x] Implement task synchronization in `ImageAnalysis.Analyzer`
-    - [x] Clean up redundant camera and permission logic
-- [ ] Verify fix
-    - [ ] Check logs for `MlKitException`
-    - [ ] Confirm face and phone detection still work
+- [x] Fix `MainActivity.kt` UI layout
+    - [x] Update `PreviewView` scale type to `FILL_CENTER`
+    - [x] Set explicit `LayoutParams` for `faceCountText` and `warningText` (`WRAP_CONTENT` height)
+    - [x] Initialize `warningText` as `GONE`
+- [x] Update `OverlayManager.kt` visibility logic
+    - [x] Manage `VISIBLE`/`GONE` states for text overlays
+- [x] Verify fix
+    - [x] Preview brightness matches system camera
+    - [x] Overlays appear correctly without dimming the whole screen

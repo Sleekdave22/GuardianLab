@@ -28,5 +28,6 @@ class OverlayManager(
 
     fun clearWarning() {
         warningText.text = ""
+        warningText.visibility = View.GONE
     }
 }

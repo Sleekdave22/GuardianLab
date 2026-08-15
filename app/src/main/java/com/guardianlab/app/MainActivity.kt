@@ -11,6 +11,8 @@ import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
@@ -27,6 +29,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var faceCountText: TextView
     private lateinit var sensitiveContentText: TextView
     private lateinit var cameraExecutor: ExecutorService
+
+    private lateinit var yoloDetector: YOLODetector
     private lateinit var blurPanel: android.view.View
     private lateinit var shieldController: ShieldController
     private lateinit var cameraManager: CameraManager
@@ -50,6 +54,7 @@ class MainActivity : ComponentActivity() {
 
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            scaleType = PreviewView.ScaleType.FILL_CENTER
         }
         faceCountText = TextView(this).apply {
             textSize = 24f
@@ -57,6 +62,7 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.argb(150, 0, 0, 0))
             text = "Faces: 0"
             setPadding(20, 40, 20, 40)
+            visibility = android.view.View.GONE
         }
         sensitiveContentText = TextView(this).apply {
             textSize = 26f
@@ -72,6 +78,7 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.argb(180, 0, 0, 0))
             text = ""
             setPadding(20, 120, 20, 40)
+            visibility = android.view.View.GONE
         }
         shieldView = android.view.View(this).apply {
             setBackgroundColor(
@@ -86,6 +93,19 @@ class MainActivity : ComponentActivity() {
 
         val layout = android.widget.FrameLayout(this)
         layout.addView(previewView)
+        
+        val faceCountParams = android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        layout.addView(faceCountText, faceCountParams)
+
+        val warningParams = android.widget.FrameLayout.LayoutParams(
+            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
+        )
+        layout.addView(warningText, warningParams)
+
         val sensitiveContentParams =
             android.widget.FrameLayout.LayoutParams(
                 android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
@@ -94,9 +114,6 @@ class MainActivity : ComponentActivity() {
                 gravity = android.view.Gravity.CENTER
             }
         layout.addView(sensitiveContentText, sensitiveContentParams)
-        layout.addView(faceCountText)
-        layout.addView(warningText)
-        layout.addView(shieldView)
         val blurParams = android.widget.FrameLayout.LayoutParams(
             700,
             300
@@ -104,6 +121,7 @@ class MainActivity : ComponentActivity() {
             gravity = android.view.Gravity.CENTER
         }
 
+        layout.addView(shieldView)
         layout.addView(blurPanel, blurParams)
         warningText.bringToFront()
         faceCountText.bringToFront()
@@ -147,6 +165,8 @@ class MainActivity : ComponentActivity() {
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
+        val modelLoader = ModelLoader(this)
+        yoloDetector = YOLODetector(modelLoader)
 
         cameraManager = CameraManager(
             lifecycleOwner = this,
@@ -168,6 +188,25 @@ class MainActivity : ComponentActivity() {
 
                 val faceTask = faceDetectionManager.process(image)
                 val phoneTask = phoneDetectionManager.process(image)
+                
+                val rotation = imageProxy.imageInfo.rotationDegrees
+                val rawBitmap = imageProxy.toBitmap()
+                
+                val matrix = Matrix().apply {
+                    postRotate(rotation.toFloat())
+                }
+                
+                val bitmap = Bitmap.createBitmap(
+                    rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
+                )
+
+                Log.d("YOLODetector", "ROTATION DEGREES: $rotation")
+                val yoloDetections = yoloDetector.detect(bitmap)
+
+                Log.d(
+                    "YOLODetector",
+                    "YOLO detections: ${yoloDetections.size}"
+                )
 
                 Tasks.whenAllComplete(faceTask, phoneTask)
                     .addOnCompleteListener {

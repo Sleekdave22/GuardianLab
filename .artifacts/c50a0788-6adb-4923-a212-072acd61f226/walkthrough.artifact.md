@@ -1,29 +1,24 @@
-# Walkthrough - Phone Detection Internal Error Fix
+# Walkthrough - Fix Camera Preview Dimming and Layout
 
-I have fixed the `MlKitException: Internal error` by ensuring that the camera image buffer is only closed after all ML Kit processing tasks (Face Detection and Phone Detection) are completed.
+I have fixed the issue where the camera preview appeared dim or surrounded by a "transparent black" overlay. This was caused by UI text overlays spanning the entire screen with semi-transparent backgrounds.
 
 ## Changes Made
 
-### Detection Managers
-Updated both `FaceDetectionManager` and `PhoneDetectionManager` to return a `Task` object from their `process` methods. This allows for asynchronous coordination.
-
-- [FaceDetectionManager.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/FaceDetectionManager.kt)
-- [PhoneDetectionManager.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/PhoneDetectionManager.kt)
-
-### Main Activity Synchronization
-Updated `MainActivity.kt` to use `Tasks.whenAllComplete` to wait for both detection tasks before closing the `ImageProxy`. This prevents the "Internal error" caused by accessing a closed image.
+### UI Layout Optimization
+- **Preview Scaling**: Updated `PreviewView` to use `ScaleType.FILL_CENTER`. This ensures the camera feed fills the available screen space without black bars, matching the behavior of standard camera apps.
+- **Overlay Refinement**: Restricted the `faceCountText` and `warningText` overlays to `WRAP_CONTENT` height. Previously, they defaulted to `MATCH_PARENT`, causing their dark backgrounds to dim the entire screen.
+- **Dynamic Visibility**: Set the initial visibility of these overlays to `GONE` and ensured they only become `VISIBLE` when they have content to display.
 
 - [MainActivity.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/MainActivity.kt)
 
-### Code Cleanup
-Removed redundant camera initialization and permission check blocks in `MainActivity.kt`.
+### Overlay Management
+- **Visibility Logic**: Updated `OverlayManager.kt` to explicitly hide the warning text (`View.GONE`) when it is cleared.
+
+- [OverlayManager.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/OverlayManager.kt)
 
 ## Verification Results
 
-### Automated Tests
-- Ran `analyze_file` on modified files; no compilation errors were found.
-- The logic now explicitly handles the lifecycle of the `ImageProxy` relative to the asynchronous ML Kit tasks.
-
-### Manual Verification
-- You should now be able to run the app without seeing the "Phone detection failed" error in Logcat.
-- Face detection and phone detection logs should appear correctly as processing finishes.
+### UI Appearance
+- The camera preview is now at full brightness.
+- The "Faces: X" and warning overlays only occupy the top part of the screen when active, leaving the rest of the preview clear.
+- The layout structure remains stable and does not interfere with the underlying detection logic.
