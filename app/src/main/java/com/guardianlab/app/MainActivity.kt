@@ -26,7 +26,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var warningText: TextView
     private lateinit var shieldView: android.view.View
-    private lateinit var faceCountText: TextView
     private lateinit var sensitiveContentText: TextView
     private lateinit var cameraExecutor: ExecutorService
 
@@ -35,8 +34,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var shieldController: ShieldController
     private lateinit var cameraManager: CameraManager
     private lateinit var faceDetectionManager: FaceDetectionManager
-
-    private lateinit var phoneDetectionManager: PhoneDetectionManager
+    private var lastYoloThreatTimestamp: Long = 0
+    private val isThreatDetectedByYolo: Boolean 
+        get() = (System.currentTimeMillis() - lastYoloThreatTimestamp) < 5000
     private lateinit var overlayManager: OverlayManager
     private lateinit var guardianEngine: GuardianEngine
     private lateinit var guardian: Guardian
@@ -55,14 +55,6 @@ class MainActivity : ComponentActivity() {
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
-        }
-        faceCountText = TextView(this).apply {
-            textSize = 24f
-            setTextColor(android.graphics.Color.WHITE)
-            setBackgroundColor(android.graphics.Color.argb(150, 0, 0, 0))
-            text = "Faces: 0"
-            setPadding(20, 40, 20, 40)
-            visibility = android.view.View.GONE
         }
         sensitiveContentText = TextView(this).apply {
             textSize = 26f
@@ -94,12 +86,6 @@ class MainActivity : ComponentActivity() {
         val layout = android.widget.FrameLayout(this)
         layout.addView(previewView)
         
-        val faceCountParams = android.widget.FrameLayout.LayoutParams(
-            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-            android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
-        )
-        layout.addView(faceCountText, faceCountParams)
-
         val warningParams = android.widget.FrameLayout.LayoutParams(
             android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
             android.widget.FrameLayout.LayoutParams.WRAP_CONTENT
@@ -124,7 +110,6 @@ class MainActivity : ComponentActivity() {
         layout.addView(shieldView)
         layout.addView(blurPanel, blurParams)
         warningText.bringToFront()
-        faceCountText.bringToFront()
         setContentView(layout)
         shieldController = ShieldController(
             shieldView,
@@ -135,7 +120,6 @@ class MainActivity : ComponentActivity() {
         guardian = Guardian(shieldController)
         guardian.protect(sensitiveContentText)
         overlayManager = OverlayManager(
-            faceCountText,
             warningText
         )
         guardianEngine = GuardianEngine()
@@ -144,24 +128,16 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 Log.d("GuardianFlow", "Face count received: $count")
 
-                faceCountText.visibility = android.view.View.VISIBLE
-                overlayManager.updateFaceCount(count)
-
-                if (guardianEngine.shouldActivateProtection(count)) {
-                    overlayManager.showWarning("⚠ ADDITIONAL VIEWER DETECTED")
-                    shieldController.showProtection()
+                val shouldProtect = guardianEngine.shouldActivateProtection(count) || isThreatDetectedByYolo
+                if (shouldProtect) {
+                    val message = if (isThreatDetectedByYolo) "⚠ CAMERA DEVICE DETECTED" else "⚠ ADDITIONAL VIEWER DETECTED"
+                    overlayManager.showWarning(message)
+                    shieldController.showProtection(message)
                 } else {
                     overlayManager.clearWarning()
                     shieldController.hideProtectionWithDelay()
                 }
             }
-        }
-        phoneDetectionManager = PhoneDetectionManager { phoneDetected ->
-
-            Log.d(
-                "GuardianPhone",
-                "Phone detected: $phoneDetected"
-            )
         }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -173,45 +149,62 @@ class MainActivity : ComponentActivity() {
             previewView = previewView,
             cameraExecutor = cameraExecutor,
             imageAnalyzer = ImageAnalysis.Analyzer { imageProxy ->
+                try {
+                    val mediaImage = imageProxy.image
 
-                val mediaImage = imageProxy.image
+                    if (mediaImage == null) {
+                        imageProxy.close()
+                        return@Analyzer
+                    }
 
-                if (mediaImage == null) {
-                    imageProxy.close()
-                    return@Analyzer
-                }
+                    val image = InputImage.fromMediaImage(
+                        mediaImage,
+                        imageProxy.imageInfo.rotationDegrees
+                    )
 
-                val image = InputImage.fromMediaImage(
-                    mediaImage,
-                    imageProxy.imageInfo.rotationDegrees
-                )
+                    val faceTask = faceDetectionManager.process(image)
+                    
+                    val rotation = imageProxy.imageInfo.rotationDegrees
+                    val rawBitmap = imageProxy.toBitmap()
+                    
+                    val matrix = Matrix().apply {
+                        postRotate(rotation.toFloat())
+                    }
+                    
+                    val bitmap = Bitmap.createBitmap(
+                        rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
+                    )
 
-                val faceTask = faceDetectionManager.process(image)
-                val phoneTask = phoneDetectionManager.process(image)
-                
-                val rotation = imageProxy.imageInfo.rotationDegrees
-                val rawBitmap = imageProxy.toBitmap()
-                
-                val matrix = Matrix().apply {
-                    postRotate(rotation.toFloat())
-                }
-                
-                val bitmap = Bitmap.createBitmap(
-                    rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true
-                )
+                    Log.d("YOLODetector", "ROTATION DEGREES: $rotation")
+                    val yoloDetections = yoloDetector.detect(bitmap)
 
-                Log.d("YOLODetector", "ROTATION DEGREES: $rotation")
-                val yoloDetections = yoloDetector.detect(bitmap)
+                    Log.d(
+                        "YOLODetector",
+                        "YOLO detections: ${yoloDetections.size}"
+                    )
 
-                Log.d(
-                    "YOLODetector",
-                    "YOLO detections: ${yoloDetections.size}"
-                )
+                    // GuardianLab YOLO detector: class 0 = phone
+                    val currentFrameThreat = yoloDetections.any {
+                        it.classId == 0 &&
+                                it.className == "phone" &&
+                                it.confidence >= 0.25f
+                    }
 
-                Tasks.whenAllComplete(faceTask, phoneTask)
-                    .addOnCompleteListener {
+                    if (currentFrameThreat) {
+                        lastYoloThreatTimestamp = System.currentTimeMillis()
+                        runOnUiThread {
+                            overlayManager.showWarning("⚠ CAMERA DEVICE DETECTED")
+                            shieldController.showProtection("⚠ CAMERA DEVICE DETECTED")
+                        }
+                    }
+
+                    faceTask.addOnCompleteListener {
                         imageProxy.close()
                     }
+                } catch (e: Exception) {
+                    Log.e("GuardianLab", "Analyzer Error", e)
+                    imageProxy.close()
+                }
             }
         )
         if (ContextCompat.checkSelfPermission(

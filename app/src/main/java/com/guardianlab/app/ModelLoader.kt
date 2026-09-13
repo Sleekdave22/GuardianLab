@@ -1,38 +1,37 @@
 package com.guardianlab.app
 
 import android.content.Context
-import org.tensorflow.lite.Interpreter
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 
 class ModelLoader(context: Context) {
 
-    private val interpreter: Interpreter
+    private val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
+
+    private val session: OrtSession
 
     init {
-        val modelBuffer = loadModel(context)
-        interpreter = Interpreter(modelBuffer)
-    }
-
-    private fun loadModel(context: Context): ByteBuffer {
         val modelBytes = context.assets
-            .open("yolo11n.tflite")
+            .open("yolo11n_v2_phone_detector.onnx")
             .use { it.readBytes() }
 
-        return ByteBuffer
-            .allocateDirect(modelBytes.size)
-            .order(ByteOrder.nativeOrder())
-            .apply {
-                put(modelBytes)
-                rewind()
-            }
+        val sessionOptions = OrtSession.SessionOptions()
+
+        session = environment.createSession(
+            modelBytes,
+            sessionOptions
+        )
     }
 
-    fun getInterpreter(): Interpreter {
-        return interpreter
+    fun getSession(): OrtSession {
+        return session
+    }
+
+    fun getEnvironment(): OrtEnvironment {
+        return environment
     }
 
     fun close() {
-        interpreter.close()
+        session.close()
     }
 }

@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation("com.google.ai.edge.litert:litert:1.4.2")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.20.0")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

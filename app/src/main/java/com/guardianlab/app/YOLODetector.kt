@@ -1,283 +1,286 @@
 package com.guardianlab.app
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Matrix
-import android.graphics.Paint
-import android.util.Log
-import org.tensorflow.lite.Interpreter
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.util.PriorityQueue
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.nio.FloatBuffer
+import kotlin.math.max
+import kotlin.math.min
 
 class YOLODetector(
     private val modelLoader: ModelLoader
 ) {
 
-    private val interpreter: Interpreter =
-        modelLoader.getInterpreter()
-
-    private val inputWidth: Int
-    private val inputHeight: Int
-
-    private val cocoNames = arrayOf(
-        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
-        "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-        "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-        "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-        "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-        "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
-        "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-        "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
-    )
-
-    init {
-        val inputTensor = interpreter.getInputTensor(0)
-        val inputShape = inputTensor.shape()
-
-        inputHeight = inputShape[2]
-        inputWidth = inputShape[3]
-
-        Log.d(
-            "YOLODetector",
-            "INIT: inputShape=${inputShape.contentToString()}, " +
-                    "outputShape=${interpreter.getOutputTensor(0).shape().contentToString()}"
-        )
+    companion object {
+        private const val INPUT_SIZE = 640
+        private const val CONFIDENCE_THRESHOLD = 0.30f
+        private const val NMS_IOU_THRESHOLD = 0.50f
+        private const val PADDING_VALUE = 114f
+        private const val CLASS_ID = 0
+        private const val CLASS_NAME = "phone"
     }
 
+    private val environment: OrtEnvironment =
+        modelLoader.getEnvironment()
+
+    private val session: OrtSession =
+        modelLoader.getSession()
+
     fun detect(bitmap: Bitmap): List<DetectionResult> {
-        val startTime = System.currentTimeMillis()
 
-        Log.d("YOLODetector", "MODEL INPUT SHAPE: ${interpreter.getInputTensor(0).shape().contentToString()}")
-        Log.d("YOLODetector", "MODEL INPUT TYPE: ${interpreter.getInputTensor(0).dataType()}")
-        Log.d("YOLODetector", "MODEL OUTPUT SHAPE: ${interpreter.getOutputTensor(0).shape().contentToString()}")
-        Log.d("YOLODetector", "DETECTOR DIMENSIONS: width=$inputWidth, height=$inputHeight")
+        val originalWidth = bitmap.width
+        val originalHeight = bitmap.height
 
-        // 1. Preprocessing: Letterbox (Maintain Aspect Ratio) + Horizontal Flip (Un-mirror)
-        val bitmapWidth = bitmap.width
-        val bitmapHeight = bitmap.height
-        Log.d("YOLODetector", "BITMAP BEFORE LETTERBOX: width=$bitmapWidth, height=$bitmapHeight")
-
-        val scale = minOf(inputWidth.toFloat() / bitmapWidth, inputHeight.toFloat() / bitmapHeight)
-        val nw = (bitmapWidth * scale).toInt()
-        val nh = (bitmapHeight * scale).toInt()
-
-        val letterboxBitmap = Bitmap.createBitmap(inputWidth, inputHeight, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(letterboxBitmap)
-        canvas.drawColor(Color.rgb(128, 128, 128)) // Gray padding
-        Log.d("YOLODetector", "BITMAP AFTER LETTERBOX: width=${letterboxBitmap.width}, height=${letterboxBitmap.height}")
-
-        val left = (inputWidth - nw) / 2f
-        val top = (inputHeight - nh) / 2f
-
-        val matrix = Matrix().apply {
-            // Resize
-            postScale(scale, scale)
-            // Un-mirror (Horizontal Flip) since front camera is mirrored
-            postScale(-1f, 1f, (nw / 2f), (nh / 2f))
-            // Center in 640x640
-            postTranslate(left, top)
+        if (originalWidth <= 0 || originalHeight <= 0) {
+            return emptyList()
         }
-        
-        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
-        canvas.drawBitmap(bitmap, matrix, paint)
 
-        Log.d("YOLODetector", "LETTERBOX: scale=$scale, padLeft=$left, padTop=$top, orig=${bitmapWidth}x${bitmapHeight}, target=${nw}x${nh}")
+        // ------------------------------------------------------------
+        // 1. Letterbox image to 640 x 640
+        // ------------------------------------------------------------
 
-        val inputBuffer = ByteBuffer
-            .allocateDirect(1 * 3 * inputWidth * inputHeight * 4)
-            .order(ByteOrder.nativeOrder())
-        Log.d("YOLODetector", "INPUT BUFFER EXPECTS: width=$inputWidth, height=$inputHeight, channels=3")
+        val scale = min(
+            INPUT_SIZE.toFloat() / originalWidth.toFloat(),
+            INPUT_SIZE.toFloat() / originalHeight.toFloat()
+        )
 
-        val pixels = IntArray(inputWidth * inputHeight)
-        letterboxBitmap.getPixels(pixels, 0, inputWidth, 0, 0, inputWidth, inputHeight)
+        val resizedWidth = (originalWidth * scale).toInt()
+        val resizedHeight = (originalHeight * scale).toInt()
 
-        // Statistics tracking
-        var sumR = 0f; var sumG = 0f; var sumB = 0f
-        var minR = 1f; var maxR = 0f
-        var minG = 1f; var maxG = 0f
-        var minB = 1f; var maxB = 0f
+        val resizedBitmap = Bitmap.createScaledBitmap(
+            bitmap,
+            resizedWidth,
+            resizedHeight,
+            true
+        )
 
-        /*
-         * NORMALIZATION TEST:
-         * Standard YOLOv11 usually expects [0, 1].
-         * If results are extremely low, change 255.0f to 1.0f below.
-         */
-        val normFactor = 255.0f 
+        val padX = (INPUT_SIZE - resizedWidth) / 2f
+        val padY = (INPUT_SIZE - resizedHeight) / 2f
 
-        // Pack in NCHW order and track stats
-        for (pixel in pixels) {
-            val r = ((pixel shr 16) and 0xFF) / normFactor
-            inputBuffer.putFloat(r)
-            sumR += r; minR = minOf(minR, r); maxR = maxOf(maxR, r)
+        // ------------------------------------------------------------
+        // 2. Build NCHW float input
+        //
+        // Model expects:
+        // [1, 3, 640, 640]
+        //
+        // Channel order:
+        // R, G, B
+        //
+        // Values:
+        // 0.0 - 1.0
+        // ------------------------------------------------------------
+
+        val input = FloatArray(1 * 3 * INPUT_SIZE * INPUT_SIZE) {
+            PADDING_VALUE / 255f
         }
-        for (pixel in pixels) {
-            val g = ((pixel shr 8) and 0xFF) / normFactor
-            inputBuffer.putFloat(g)
-            sumG += g; minG = minOf(minG, g); maxG = maxOf(maxG, g)
-        }
-        for (pixel in pixels) {
-            val b = (pixel and 0xFF) / normFactor
-            inputBuffer.putFloat(b)
-            sumB += b; minB = minOf(minB, b); maxB = maxOf(maxB, b)
-        }
-        
-        val count = (inputWidth * inputHeight).toFloat()
-        Log.d("YOLODetector", "INPUT STATS (Norm=$normFactor): R[avg=${sumR/count}, min=$minR, max=$maxR], G[avg=${sumG/count}, min=$minG, max=$maxG], B[avg=${sumB/count}, min=$minB, max=$maxB]")
 
-        inputBuffer.rewind()
+        val pixels = IntArray(resizedWidth * resizedHeight)
 
-        // 2. Run Inference
-        val outputShape = interpreter.getOutputTensor(0).shape()
-        val channels = outputShape[1] // 84 (4 boxes + 80 classes)
-        val candidates = outputShape[2] // 8400
+        resizedBitmap.getPixels(
+            pixels,
+            0,
+            resizedWidth,
+            0,
+            0,
+            resizedWidth,
+            resizedHeight
+        )
 
-        val output = Array(1) {
-            Array(channels) {
-                FloatArray(candidates)
+        val planeSize = INPUT_SIZE * INPUT_SIZE
+
+        for (y in 0 until resizedHeight) {
+            for (x in 0 until resizedWidth) {
+
+                val pixel = pixels[y * resizedWidth + x]
+
+                val r = ((pixel shr 16) and 0xFF) / 255f
+                val g = ((pixel shr 8) and 0xFF) / 255f
+                val b = (pixel and 0xFF) / 255f
+
+                val dstX = x + padX.toInt()
+                val dstY = y + padY.toInt()
+
+                val index = dstY * INPUT_SIZE + dstX
+
+                input[index] = r
+                input[planeSize + index] = g
+                input[(planeSize * 2) + index] = b
             }
         }
 
-        interpreter.run(inputBuffer, output)
+        // ------------------------------------------------------------
+        // 3. Run ONNX model
+        // ------------------------------------------------------------
 
-        // 3. Diagnostic Logging: Top 10 Class Scores
-        val topScores = PriorityQueue<RawScore>(10) { a, b -> a.score.compareTo(b.score) }
-        var cellPhoneMaxScore = 0f
-        var cellPhoneMaxCandidate = -1
+        val inputTensor = OnnxTensor.createTensor(
+            environment,
+            FloatBuffer.wrap(input),
+            longArrayOf(1, 3, INPUT_SIZE.toLong(), INPUT_SIZE.toLong())
+        )
 
-        for (candidate in 0 until candidates) {
-            // Specifically track ClassID 67 (cell phone)
-            val score67 = output[0][67 + 4][candidate]
-            if (score67 > cellPhoneMaxScore) {
-                cellPhoneMaxScore = score67
-                cellPhoneMaxCandidate = candidate
-            }
+        val results = session.run(
+            mapOf("images" to inputTensor)
+        )
 
-            for (classId in 0 until channels - 4) {
-                val score = output[0][classId + 4][candidate]
-                if (topScores.size < 10 || score > topScores.peek()!!.score) {
-                    if (topScores.size == 10) topScores.poll()
-                    topScores.add(RawScore(score, classId, candidate))
+        try {
+
+            // YOLO11n deployment output:
+            // [1, 5, 8400]
+            //
+            // 5 values:
+            // x_center
+            // y_center
+            // width
+            // height
+            // phone_confidence
+
+            val output = results[0].value as Array<Array<FloatArray>>
+
+            val detections = mutableListOf<DetectionResult>()
+
+            for (i in 0 until 8400) {
+
+                val xCenter = output[0][0][i]
+                val yCenter = output[0][1][i]
+                val width = output[0][2][i]
+                val height = output[0][3][i]
+                val confidence = output[0][4][i]
+
+                if (confidence < CONFIDENCE_THRESHOLD) {
+                    continue
                 }
-            }
-        }
 
-        Log.d("YOLODetector", "CELL PHONE MAX SCORE: $cellPhoneMaxScore, Candidate: $cellPhoneMaxCandidate")
-        
-        if (cellPhoneMaxCandidate != -1) {
-             Log.d("YOLODetector", "CELL PHONE RAW BOX: " +
-                "cx=${output[0][0][cellPhoneMaxCandidate]}, " +
-                "cy=${output[0][1][cellPhoneMaxCandidate]}, " +
-                "w=${output[0][2][cellPhoneMaxCandidate]}, " +
-                "h=${output[0][3][cellPhoneMaxCandidate]}")
-        }
+                // ----------------------------------------------------
+                // Convert xywh -> xyxy in 640-space
+                // ----------------------------------------------------
 
-        Log.d("YOLODetector", "--- Top 10 Raw Scores ---")
-        topScores.toList().sortedByDescending { it.score }.forEachIndexed { i, raw ->
-            val name = if (raw.classId < cocoNames.size) cocoNames[raw.classId] else "unknown"
-            Log.d("YOLODetector", "#$i: $name (${raw.classId}), Score=${raw.score}, Candidate=${raw.candidate}")
-        }
+                var x1 = xCenter - width / 2f
+                var y1 = yCenter - height / 2f
+                var x2 = xCenter + width / 2f
+                var y2 = yCenter + height / 2f
 
-        // 4. Box Decoding
-        val allDetections = mutableListOf<DetectionResult>()
-        val confidenceThreshold = 0.25f
+                // ----------------------------------------------------
+                // Undo letterbox
+                // ----------------------------------------------------
 
-        for (candidate in 0 until candidates) {
-            var bestClassId = -1
-            var maxConfidence = 0f
+                x1 = (x1 - padX) / scale
+                y1 = (y1 - padY) / scale
+                x2 = (x2 - padX) / scale
+                y2 = (y2 - padY) / scale
 
-            for (classId in 0 until channels - 4) {
-                val confidence = output[0][classId + 4][candidate]
-                if (confidence > maxConfidence) {
-                    maxConfidence = confidence
-                    bestClassId = classId
+                // ----------------------------------------------------
+                // Clip to original image
+                // ----------------------------------------------------
+
+                x1 = x1.coerceIn(0f, originalWidth.toFloat())
+                y1 = y1.coerceIn(0f, originalHeight.toFloat())
+                x2 = x2.coerceIn(0f, originalWidth.toFloat())
+                y2 = y2.coerceIn(0f, originalHeight.toFloat())
+
+                if (x2 <= x1 || y2 <= y1) {
+                    continue
                 }
-            }
 
-            if (maxConfidence >= confidenceThreshold) {
-                // YOLO output is normalized [0, 1] relative to input dimensions (640)
-                val cx = output[0][0][candidate] * inputWidth
-                val cy = output[0][1][candidate] * inputHeight
-                val w = output[0][2][candidate] * inputWidth
-                val h = output[0][3][candidate] * inputHeight
-
-                // Convert from center coordinates to corners in 640x640 space
-                val x1_640 = cx - w / 2f
-                val y1_640 = cy - h / 2f
-                val x2_640 = cx + w / 2f
-                val y2_640 = cy + h / 2f
-
-                // Correct for letterbox padding and scale back to original bitmap size
-                // Note: Horizontal flip is un-mirrored here because the detection logic works on the flipped pixels.
-                // The boxes should map back to the 'upright' bitmap we passed in from MainActivity.
-                val x1 = (x1_640 - left) / scale
-                val y1 = (y1_640 - top) / scale
-                val x2 = (x2_640 - left) / scale
-                val y2 = (y2_640 - top) / scale
-
-                allDetections.add(
+                detections.add(
                     DetectionResult(
-                        classId = bestClassId,
-                        className = cocoNames[bestClassId],
-                        confidence = maxConfidence,
-                        x1 = x1, y1 = y1, x2 = x2, y2 = y2
+                        classId = CLASS_ID,
+                        className = CLASS_NAME,
+                        confidence = confidence,
+                        x1 = x1,
+                        y1 = y1,
+                        x2 = x2,
+                        y2 = y2
                     )
                 )
             }
+
+            // --------------------------------------------------------
+            // 4. Non-Maximum Suppression (NMS)
+            // --------------------------------------------------------
+
+            return applyNms(
+                detections,
+                NMS_IOU_THRESHOLD
+            )
+
+        } finally {
+
+            results.close()
+            inputTensor.close()
+            resizedBitmap.recycle()
         }
-
-        Log.d("YOLODetector", "Detections before NMS: ${allDetections.size}")
-        if (allDetections.isNotEmpty()) {
-            val strongest = allDetections.maxByOrNull { it.confidence }!!
-            Log.d("YOLODetector", "Strongest BEFORE NMS: ${strongest.className}, Conf=${strongest.confidence}, Box=[${strongest.x1}, ${strongest.y1}, ${strongest.x2}, ${strongest.y2}]")
-        }
-
-        // 5. NMS
-        val finalDetections = nms(allDetections, 0.45f)
-        Log.d("YOLODetector", "Detections after NMS: ${finalDetections.size}")
-        if (finalDetections.isNotEmpty()) {
-            val strongest = finalDetections.maxByOrNull { it.confidence }!!
-            Log.d("YOLODetector", "Strongest AFTER NMS: ${strongest.className}, Conf=${strongest.confidence}, Box=[${strongest.x1}, ${strongest.y1}, ${strongest.x2}, ${strongest.y2}]")
-        }
-
-        val totalTime = System.currentTimeMillis() - startTime
-        Log.d("YOLODetector", "Total processing time: ${totalTime}ms")
-
-        return finalDetections
     }
 
-    private fun nms(detections: List<DetectionResult>, iouThreshold: Float): List<DetectionResult> {
-        val sorted = detections.sortedByDescending { it.confidence }.toMutableList()
-        val results = mutableListOf<DetectionResult>()
+    private fun applyNms(
+        detections: List<DetectionResult>,
+        iouThreshold: Float
+    ): List<DetectionResult> {
+
+        if (detections.isEmpty()) {
+            return emptyList()
+        }
+
+        val sorted = detections
+            .sortedByDescending { it.confidence }
+            .toMutableList()
+
+        val selected = mutableListOf<DetectionResult>()
+
         while (sorted.isNotEmpty()) {
+
             val best = sorted.removeAt(0)
-            results.add(best)
+            selected.add(best)
+
             val iterator = sorted.iterator()
+
             while (iterator.hasNext()) {
-                val next = iterator.next()
-                if (calculateIoU(best, next) >= iouThreshold) {
+
+                val candidate = iterator.next()
+
+                if (calculateIoU(best, candidate) > iouThreshold) {
                     iterator.remove()
                 }
             }
         }
-        return results
+
+        return selected
     }
 
-    private fun calculateIoU(a: DetectionResult, b: DetectionResult): Float {
-        val x1 = maxOf(a.x1, b.x1)
-        val y1 = maxOf(a.y1, b.y1)
-        val x2 = minOf(a.x2, b.x2)
-        val y2 = minOf(a.y2, b.y2)
-        val intersection = maxOf(0f, x2 - x1) * maxOf(0f, y2 - y1)
-        val areaA = (a.x2 - a.x1) * (a.y2 - a.y1)
-        val areaB = (b.x2 - b.x1) * (b.y2 - b.y1)
-        return intersection / (areaA + areaB - intersection)
+    private fun calculateIoU(
+        a: DetectionResult,
+        b: DetectionResult
+    ): Float {
+
+        val intersectionX1 = max(a.x1, b.x1)
+        val intersectionY1 = max(a.y1, b.y1)
+        val intersectionX2 = min(a.x2, b.x2)
+        val intersectionY2 = min(a.y2, b.y2)
+
+        val intersectionWidth =
+            max(0f, intersectionX2 - intersectionX1)
+
+        val intersectionHeight =
+            max(0f, intersectionY2 - intersectionY1)
+
+        val intersectionArea =
+            intersectionWidth * intersectionHeight
+
+        val areaA =
+            max(0f, a.x2 - a.x1) *
+                    max(0f, a.y2 - a.y1)
+
+        val areaB =
+            max(0f, b.x2 - b.x1) *
+                    max(0f, b.y2 - b.y1)
+
+        val unionArea =
+            areaA + areaB - intersectionArea
+
+        if (unionArea <= 0f) {
+            return 0f
+        }
+
+        return intersectionArea / unionArea
     }
-
-    private data class RawScore(val score: Float, val classId: Int, val candidate: Int)
-
-    fun getInputWidth() = inputWidth
-    fun getInputHeight() = inputHeight
-    fun close() { modelLoader.close() }
 }

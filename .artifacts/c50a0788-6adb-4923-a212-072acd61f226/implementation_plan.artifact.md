@@ -1,28 +1,28 @@
-# Implementation Plan - YOLO Detection Root Cause Investigation
+# Implementation Plan - Instant Response and UI Cleanup
 
-The goal is to identify why "cell phone" scores are extremely low despite the model being functional (high "person" scores). We will systematically test normalization ranges, channel ordering, and coordinate scaling.
-
-## User Review Required
-
-> [!IMPORTANT]
-> **Dual-Inference Diagnosis**: I will modify `detect()` to optionally run twice (or log comparative stats) to test different normalization scales (`[0, 1]` vs `[0, 255]`). This is the most likely reason for extremely low scores if the model graph doesn't include a division-by-255 layer.
-
-> [!CAUTION]
-> **Front Camera Mirroring**: Front camera images are mirrored by default. I will add a horizontal flip to the preprocessing to ensure the model sees a "natural" view, which can sometimes improve detection of specific devices.
+The goal is to eliminate detection latency for immediate protection and clean up the UI by removing the face count display.
 
 ## Proposed Changes
 
+### [UI / Layout]
+
+#### [MODIFY] [MainActivity.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/MainActivity.kt)
+- **Hide Face Count**:
+    - Remove the `faceCountText` initialization and its addition to the layout.
+    - Remove `overlayManager.updateFaceCount(count)` from the face detection callback.
+- **Optimize Detection Loop**:
+    - Ensure YOLO detection happens first or in parallel (it's currently sequential but fast).
+    - Trigger `shieldController.showProtection()` immediately after the `currentFrameThreat` check, even before starting the next frame analysis.
+- **Shorten Delay**: Reduce the `hideProtectionWithDelay` to a shorter value if appropriate, but keeping it at 5s for the YOLO "sticky" state to ensure once triggered, it stays triggered.
+
 ### [Detection Engine]
 
-#### [MODIFY] [YOLODetector.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/YOLODetector.kt)
-- **Normalization Test**: Add a flag to toggle between `/ 255.0f` and raw `0..255` floats in the input buffer.
-- **BGR Swap**: Add logic to test BGR order (Blue-Green-Red) instead of RGB.
-- **Coordinate Magnitude Check**: Log raw values of `output[0][0..3]` for the candidate with the highest class score to determine if they are normalized or pixel-space.
-- **Preprocessing Flip**: Add a `Matrix` flip (horizontal) during the letterboxing stage to un-mirror the front camera feed.
+#### [MODIFY] [OverlayManager.kt](file:///Users/mac/AndroidStudioProjects/GuardianLab/app/src/main/java/com/guardianlab/app/OverlayManager.kt)
+- Remove `updateFaceCount` method and the reference to `faceCountText`.
 
 ## Verification Plan
 
 ### Manual Verification
-- **Run the app** and observe Logcat for `YOLODetector`.
-- **Compare Scores**: Report the `CELL PHONE MAX SCORE` for the different normalization/channel settings.
-- **Check Box Scales**: Verify if the logged raw coordinates are small ($< 1$) or large ($> 1$).
+- **Speed Test**: Point a phone at the camera quickly. The shield should appear almost instantly.
+- **UI Test**: Verify that the "Faces: X" text is no longer visible on the screen.
+- **Consistency**: Ensure that multiple faces still trigger the shield, but without the counter being visible.

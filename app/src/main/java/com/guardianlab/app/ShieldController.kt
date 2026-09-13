@@ -49,12 +49,12 @@ class ShieldController(
         protectionTargets.remove(target)
     }
 
-    fun showProtection() {
+    fun showProtection(message: String) {
 
         handler.removeCallbacks(hideRunnable)
         hideScheduled = false
 
-        warningText.text = "⚠ ADDITIONAL VIEWER DETECTED"
+        warningText.text = message
 
         shieldView.visibility = View.GONE
         blurPanel.visibility = View.GONE
