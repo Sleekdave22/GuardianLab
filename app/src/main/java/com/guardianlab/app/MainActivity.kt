@@ -62,6 +62,8 @@ class MainActivity : ComponentActivity() {
 
         Log.d("GuardianFlow", "MAIN ACTIVITY STARTED")
 
+        MobileClipLoadProbe.run(this)
+
         previewView = PreviewView(this).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
             scaleType = PreviewView.ScaleType.FILL_CENTER
