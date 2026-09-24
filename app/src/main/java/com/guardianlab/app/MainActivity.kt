@@ -34,9 +34,19 @@ class MainActivity : ComponentActivity() {
     private lateinit var shieldController: ShieldController
     private lateinit var cameraManager: CameraManager
     private lateinit var faceDetectionManager: FaceDetectionManager
-    private var lastYoloThreatTimestamp: Long = 0
-    private val isThreatDetectedByYolo: Boolean 
-        get() = (System.currentTimeMillis() - lastYoloThreatTimestamp) < 5000
+    private val yoloDetectionHistory = ArrayDeque<Boolean>()
+    private var isYoloThreatConfirmed = false
+    private var consecutiveYoloMisses = 0
+
+    private companion object {
+        const val YOLO_STRONG_CONFIDENCE = 0.45f
+        const val YOLO_WEAK_CONFIDENCE = 0.30f
+
+        const val YOLO_CONFIRMATION_WINDOW = 3
+        const val YOLO_CONFIRMATION_REQUIRED = 2
+
+        const val YOLO_MISSES_TO_CLEAR = 5
+    }
     private lateinit var overlayManager: OverlayManager
     private lateinit var guardianEngine: GuardianEngine
     private lateinit var guardian: Guardian
@@ -128,9 +138,17 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 Log.d("GuardianFlow", "Face count received: $count")
 
-                val shouldProtect = guardianEngine.shouldActivateProtection(count) || isThreatDetectedByYolo
+                val shouldProtect =
+                    guardianEngine.shouldActivateProtection(count) || isYoloThreatConfirmed
+
                 if (shouldProtect) {
-                    val message = if (isThreatDetectedByYolo) "⚠ CAMERA DEVICE DETECTED" else "⚠ ADDITIONAL VIEWER DETECTED"
+                    val message =
+                        if (isYoloThreatConfirmed) {
+                            "⚠ CAMERA DEVICE DETECTED"
+                        } else {
+                            "⚠ ADDITIONAL VIEWER DETECTED"
+                        }
+
                     overlayManager.showWarning(message)
                     shieldController.showProtection(message)
                 } else {
@@ -176,25 +194,155 @@ class MainActivity : ComponentActivity() {
                     )
 
                     Log.d("YOLODetector", "ROTATION DEGREES: $rotation")
+                    var totalR = 0L
+                    var totalG = 0L
+                    var totalB = 0L
+                    var samples = 0
+
+                    val step = 20
+
+                    for (y in 0 until bitmap.height step step) {
+                        for (x in 0 until bitmap.width step step) {
+                            val pixel = bitmap.getPixel(x, y)
+
+                            totalR += android.graphics.Color.red(pixel)
+                            totalG += android.graphics.Color.green(pixel)
+                            totalB += android.graphics.Color.blue(pixel)
+                            samples++
+                        }
+                    }
+
+                    val avgR = totalR / samples
+                    val avgG = totalG / samples
+                    val avgB = totalB / samples
+                    val avgBrightness = (0.299 * avgR) + (0.587 * avgG) + (0.114 * avgB)
+
+                    Log.d(
+                        "YOLODetector",
+                        "YOLO INPUT: avgRGB=($avgR,$avgG,$avgB), brightness=${"%.1f".format(avgBrightness)}"
+                    )
                     val yoloDetections = yoloDetector.detect(bitmap)
 
                     Log.d(
                         "YOLODetector",
                         "YOLO detections: ${yoloDetections.size}"
                     )
-
-                    // GuardianLab YOLO detector: class 0 = phone
-                    val currentFrameThreat = yoloDetections.any {
-                        it.classId == 0 &&
-                                it.className == "phone" &&
-                                it.confidence >= 0.25f
+                    yoloDetections.forEachIndexed { index, detection ->
+                        Log.d(
+                            "YOLODetector",
+                            "Detection[$index]: class=${detection.className}, " +
+                                    "confidence=${detection.confidence}, " +
+                                    "box=(${detection.x1}, ${detection.y1})-(${detection.x2}, ${detection.y2})"
+                        )
                     }
 
-                    if (currentFrameThreat) {
-                        lastYoloThreatTimestamp = System.currentTimeMillis()
-                        runOnUiThread {
-                            overlayManager.showWarning("⚠ CAMERA DEVICE DETECTED")
-                            shieldController.showProtection("⚠ CAMERA DEVICE DETECTED")
+                    val hasStrongPhoneDetection = yoloDetections.any {
+                        it.classId == 0 &&
+                        it.className == "phone" &&
+                        it.confidence >= YOLO_STRONG_CONFIDENCE
+                    }
+
+                    val hasWeakPhoneDetection = yoloDetections.any {
+                        it.classId == 0 &&
+                        it.className == "phone" &&
+                        it.confidence >= YOLO_WEAK_CONFIDENCE
+                    }
+
+                    if (!isYoloThreatConfirmed) {
+                        // We are not yet protecting.
+                        // Only strong detections can establish the initial threat.
+                        yoloDetectionHistory.addLast(hasWeakPhoneDetection)
+
+                        if (yoloDetectionHistory.size > YOLO_CONFIRMATION_WINDOW) {
+                            yoloDetectionHistory.removeFirst()
+                        }
+
+                        val confirmedDetections = yoloDetectionHistory.count { it }
+
+                        if (confirmedDetections >= YOLO_CONFIRMATION_REQUIRED) {
+                            isYoloThreatConfirmed = true
+                            consecutiveYoloMisses = 0
+
+                            Log.d(
+                                "YOLODetector",
+                                "YOLO THREAT CONFIRMED: history=$yoloDetectionHistory"
+                            )
+
+                            runOnUiThread {
+                                overlayManager.showWarning("⚠ CAMERA DEVICE DETECTED")
+                                shieldController.showProtection("⚠ CAMERA DEVICE DETECTED")
+                            }
+                        } else {
+                            Log.d(
+                                "YOLODetector",
+                                "YOLO waiting for confirmation: " +
+                                    "history=$yoloDetectionHistory " +
+                                    "strongDetections=$confirmedDetections"
+                            )
+                        }
+                    } else {
+                        // A phone has already been confirmed.
+                        //
+                        // Strong detection OR weak detection means the phone is
+                        // still visible enough to maintain protection.
+                        //
+                        // Only a completely missing phone detection counts as a miss.
+
+                        if (hasStrongPhoneDetection) {
+                            consecutiveYoloMisses = 0
+
+                            Log.d(
+                                "YOLODetector",
+                                "YOLO CONFIRMED — strong phone detection"
+                            )
+
+                            runOnUiThread {
+                                overlayManager.showWarning("⚠ CAMERA DEVICE DETECTED")
+                                shieldController.showProtection("⚠ CAMERA DEVICE DETECTED")
+                            }
+
+                        } else if (hasWeakPhoneDetection) {
+                            consecutiveYoloMisses = 0
+
+                            val weakDetection = yoloDetections
+                                .filter {
+                                    it.classId == 0 &&
+                                        it.className == "phone" &&
+                                        it.confidence >= YOLO_WEAK_CONFIDENCE
+                                }
+                                .maxByOrNull { it.confidence }
+
+                            Log.d(
+                                "YOLODetector",
+                                "YOLO CONFIRMED — weak phone detection " +
+                                    "confidence=${weakDetection?.confidence}"
+                            )
+
+                            runOnUiThread {
+                                overlayManager.showWarning("⚠ CAMERA DEVICE DETECTED")
+                                shieldController.showProtection("⚠ CAMERA DEVICE DETECTED")
+                            }
+
+                        } else {
+                            // No phone detection at all.
+                            consecutiveYoloMisses++
+
+                            Log.d(
+                                "YOLODetector",
+                                "YOLO CONFIRMED — no phone detected, " +
+                                    "missed frame $consecutiveYoloMisses/$YOLO_MISSES_TO_CLEAR"
+                            )
+
+                            if (consecutiveYoloMisses >= YOLO_MISSES_TO_CLEAR) {
+                                isYoloThreatConfirmed = false
+                                consecutiveYoloMisses = 0
+                                yoloDetectionHistory.clear()
+
+                                Log.d(
+                                    "YOLODetector",
+                                    "YOLO THREAT CLEARED after consecutive misses"
+                                )
+                            }
                         }
                     }
 
