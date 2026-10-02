@@ -37,10 +37,19 @@ class MainActivity : ComponentActivity() {
     private val yoloDetectionHistory = ArrayDeque<Boolean>()
     private var isYoloThreatConfirmed = false
     private var lastStrongYoloElapsedMs: Long? = null
+    private val lightingAnalyzer = LightingAnalyzer()
+    private var lastYoloStrongConfidence: Float? = null
 
     private companion object {
-        // DARK-PROFILE TEST PARAMETERS
-        const val YOLO_STRONG_CONFIDENCE = 0.50f
+        // LIGHTING-DEPENDENT YOLO PARAMETERS
+        //
+        // DARK 0.50: provisionally validated dark-profile threshold.
+        // NORMAL 0.40: provisional normal-light threshold.
+        // Color cast is tracked separately but does not yet alter threshold.
+        const val YOLO_DARK_STRONG_CONFIDENCE = 0.50f
+        const val YOLO_NORMAL_NEUTRAL_STRONG_CONFIDENCE = 0.40f
+        const val YOLO_NORMAL_COLORED_STRONG_CONFIDENCE = 0.50f
+
         const val YOLO_MIN_BOX_WIDTH = 50f
         const val YOLO_MIN_BOX_HEIGHT = 50f
 
@@ -254,6 +263,24 @@ class MainActivity : ComponentActivity() {
                     val avgB = totalB / samples
                     val avgBrightness = (0.299 * avgR) + (0.587 * avgG) + (0.114 * avgB)
 
+                    val lightingState = lightingAnalyzer.update(
+                        avgR = avgR.toInt(),
+                        avgG = avgG.toInt(),
+                        avgB = avgB.toInt(),
+                        brightness = avgBrightness
+                    )
+
+                    Log.d(
+                        "GL_LIGHTING",
+                        "profile=${lightingState.profileKey} | " +
+                            "rawBrightness=${"%.1f".format(java.util.Locale.US, lightingState.rawBrightness)} | " +
+                            "smoothBrightness=${"%.1f".format(java.util.Locale.US, lightingState.smoothedBrightness)} | " +
+                            "normRGB=(" +
+                            "%.3f".format(java.util.Locale.US, lightingState.normalizedR) + "," +
+                            "%.3f".format(java.util.Locale.US, lightingState.normalizedG) + "," +
+                            "%.3f".format(java.util.Locale.US, lightingState.normalizedB) + ")"
+                    )
+
                     Log.d(
                         "YOLODetector",
                         "YOLO INPUT: avgRGB=($avgR,$avgG,$avgB), brightness=${"%.1f".format(avgBrightness)}"
@@ -377,10 +404,63 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    val activeYoloStrongConfidence =
+                        when (lightingState.intensity) {
+
+                            LightIntensity.NORMAL -> {
+                                when (lightingState.colorCast) {
+                                    LightColorCast.NEUTRAL ->
+                                        YOLO_NORMAL_NEUTRAL_STRONG_CONFIDENCE
+
+                                    LightColorCast.BLUE,
+                                    LightColorCast.RED,
+                                    LightColorCast.GREEN,
+                                    LightColorCast.UNKNOWN ->
+                                        YOLO_NORMAL_COLORED_STRONG_CONFIDENCE
+                                }
+                            }
+
+                            LightIntensity.DARK ->
+                                YOLO_DARK_STRONG_CONFIDENCE
+
+                            LightIntensity.UNKNOWN ->
+                                YOLO_DARK_STRONG_CONFIDENCE
+                        }
+
+                    /*
+                     * Do not let confirmation-history frames collected under
+                     * one confidence threshold carry into another threshold.
+                     *
+                     * This also handles color-state changes such as:
+                     * NORMAL_BLUE (0.50) -> NORMAL_NEUTRAL (0.40).
+                     *
+                     * Existing confirmed protection is NOT cleared here.
+                     */
+                    if (lastYoloStrongConfidence != activeYoloStrongConfidence) {
+
+                        if (!isYoloThreatConfirmed) {
+                            yoloDetectionHistory.clear()
+                        }
+
+                        Log.d(
+                            "GL_LIGHTING",
+                            "YOLO threshold switch | " +
+                                "profile=${lightingState.profileKey} | " +
+                                "from=$lastYoloStrongConfidence | " +
+                                "to=${"%.2f".format(
+                                    java.util.Locale.US,
+                                    activeYoloStrongConfidence
+                                )}"
+                        )
+
+                        lastYoloStrongConfidence =
+                            activeYoloStrongConfidence
+                    }
+
                     val hasStrongPhoneDetection = yoloDetections.any {
                         it.classId == 0 &&
                             it.className == "phone" &&
-                            it.confidence >= YOLO_STRONG_CONFIDENCE &&
+                            it.confidence >= activeYoloStrongConfidence &&
                             (it.x2 - it.x1) >= YOLO_MIN_BOX_WIDTH &&
                             (it.y2 - it.y1) >= YOLO_MIN_BOX_HEIGHT
                     }
@@ -389,7 +469,7 @@ class MainActivity : ComponentActivity() {
 
                     if (!isYoloThreatConfirmed) {
 
-                        // DARK PROFILE:
+                        // ADAPTIVE LIGHTING PROFILE:
                         // Initial activation requires strong, substantial phone
                         // evidence in at least 3 of the last 5 analyzed frames.
                         yoloDetectionHistory.addLast(hasStrongPhoneDetection)

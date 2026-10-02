@@ -16,13 +16,12 @@ class ModelLoader(context: Context) {
             .use { it.readBytes() }
 
         val sessionOptions = OrtSession.SessionOptions().apply {
-            try {
-                // Offload model compilation and layers execution to NPU/GPU hardware
-                addNnapi()
-            } catch (e: Exception) {
-                android.util.Log.w("ModelLoader", "NNAPI hardware acceleration not supported on this device, falling back to CPU", e)
-            }
-            // Optimize memory management for video streams
+
+            // D1-L6G CONTROL:
+            // NNAPI intentionally disabled.
+            // Force ONNX Runtime CPU execution to determine whether
+            // repeated-inference corruption is caused by NNAPI.
+
             setIntraOpNumThreads(2)
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
